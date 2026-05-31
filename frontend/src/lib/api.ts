@@ -1,8 +1,14 @@
 /**
- * API client para conectar con el backend FastAPI local.
+ * API client - usa rutas locales del mismo frontend por defecto,
+ * o un backend externo si NEXT_PUBLIC_API_URL está configurado.
  */
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+// En producción (Vercel), si no hay backend configurado, usa las rutas API locales
+const EXTERNAL_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+
+// Determinar si usar API externa o rutas locales
+const USE_EXTERNAL = EXTERNAL_API_URL && EXTERNAL_API_URL !== "http://localhost:8000";
 
 export interface MarketSummary {
   symbol: string;
@@ -41,15 +47,29 @@ export interface HealthResponse {
 }
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  let url: string;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(API_KEY ? { "x-api-key": API_KEY } : {}),
-    ...((options?.headers as Record<string, string>) || {}),
   };
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
+  if (USE_EXTERNAL) {
+    // Usar backend externo (FastAPI local o remoto)
+    url = `${EXTERNAL_API_URL}${endpoint}`;
+    if (API_KEY) {
+      headers["x-api-key"] = API_KEY;
+    }
+  } else {
+    // Usar rutas API locales del mismo frontend (Next.js API routes)
+    url = `/api${endpoint}`;
+  }
+
+  const res = await fetch(url, {
     ...options,
-    headers,
+    headers: {
+      ...headers,
+      ...((options?.headers as Record<string, string>) || {}),
+    },
+    cache: "no-store",
   });
 
   if (!res.ok) {
@@ -61,11 +81,11 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
 }
 
 export async function healthCheck(): Promise<HealthResponse> {
-  return request<HealthResponse>("/api/health");
+  return request<HealthResponse>("/health");
 }
 
 export async function getMarketData(): Promise<MarketDataResponse> {
-  return request<MarketDataResponse>("/api/market-data");
+  return request<MarketDataResponse>("/market-data");
 }
 
 export async function getSymbolData(symbol: string): Promise<{
@@ -74,7 +94,7 @@ export async function getSymbolData(symbol: string): Promise<{
   summary: MarketSummary;
   last_updated: string | null;
 }> {
-  return request(`/api/market-data/${symbol.toUpperCase()}`);
+  return request(`/market-data/${symbol.toUpperCase()}`);
 }
 
 export async function refreshData(): Promise<{
@@ -84,7 +104,7 @@ export async function refreshData(): Promise<{
   symbols: number;
   last_updated: string | null;
 }> {
-  return request("/api/refresh", { method: "POST" });
+  return request("/refresh", { method: "POST" });
 }
 
 export async function setMockMode(): Promise<{
@@ -92,7 +112,7 @@ export async function setMockMode(): Promise<{
   message: string;
   mock_mode: boolean;
 }> {
-  return request("/api/mode/mock", { method: "POST" });
+  return request("/mode/mock", { method: "POST" });
 }
 
 export async function setLiveMode(): Promise<{
@@ -100,5 +120,5 @@ export async function setLiveMode(): Promise<{
   message: string;
   mock_mode: boolean;
 }> {
-  return request("/api/mode/live", { method: "POST" });
+  return request("/mode/live", { method: "POST" });
 }
