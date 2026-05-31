@@ -1,14 +1,39 @@
 /**
- * API client - usa rutas locales del mismo frontend por defecto,
- * o un backend externo si NEXT_PUBLIC_API_URL está configurado.
+ * API client con 3 modos:
+ * - "frontend-mock": Datos mock generados en el frontend (sin backend)
+ * - "backend-mock": Backend FastAPI en modo mock
+ * - "backend-real": Backend FastAPI con datos reales de IB
  */
 
-// En producción (Vercel), si no hay backend configurado, usa las rutas API locales
-const EXTERNAL_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+export type AppMode = "frontend-mock" | "backend-mock" | "backend-real";
+
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
-// Determinar si usar API externa o rutas locales
-const USE_EXTERNAL = EXTERNAL_API_URL && EXTERNAL_API_URL !== "http://localhost:8000";
+// ─── Gestión de modo ─────────────────────────────────────────────
+
+export function getMode(): AppMode {
+  if (typeof window === "undefined") return "frontend-mock";
+  return (localStorage.getItem("app-mode") as AppMode) || "frontend-mock";
+}
+
+export function setMode(mode: AppMode) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("app-mode", mode);
+  }
+}
+
+export function getBackendUrl(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("backend-url") || "http://localhost:8000";
+}
+
+export function setBackendUrl(url: string) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("backend-url", url);
+  }
+}
+
+// ─── Interfaces ───────────────────────────────────────────────────
 
 export interface MarketSummary {
   symbol: string;
@@ -46,79 +71,58 @@ export interface HealthResponse {
   timestamp: string;
 }
 
-async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  let url: string;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+// ─── Request genérico ─────────────────────────────────────────────
 
-  if (USE_EXTERNAL) {
-    // Usar backend externo (FastAPI local o remoto)
-    url = `${EXTERNAL_API_URL}${endpoint}`;
-    if (API_KEY) {
-      headers["x-api-key"] = API_KEY;
-    }
-  } else {
-    // Usar rutas API locales del mismo frontend (Next.js API routes)
-    url = `/api${endpoint}`;
-  }
-
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...headers,
-      ...((options?.headers as Record<string, string>) || {}),
-    },
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "Unknown error");
-    throw new Error(`API Error ${res.status}: ${errorText}`);
-  }
-
+async function requestLocal<T>(endpoint: string): Promise<T> {
+  const res = await fetch(`/api${endpoint}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`API Error ${res.status}`);
   return res.json();
 }
 
+async function requestBackend<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const backendUrl = getBackendUrl();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (API_KEY) headers["x-api-key"] = API_KEY;
+
+  const res = await fetch(`${backendUrl}${endpoint}`, {
+    ...options,
+    headers: { ...headers, ...((options?.headers as Record<string, string>) || {}) },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Backend Error ${res.status}`);
+  return res.json();
+}
+
+// ─── API pública ──────────────────────────────────────────────────
+
 export async function healthCheck(): Promise<HealthResponse> {
-  return request<HealthResponse>("/health");
+  const mode = getMode();
+  if (mode === "frontend-mock") {
+    return requestLocal<HealthResponse>("/health");
+  }
+  return requestBackend<HealthResponse>("/api/health");
 }
 
 export async function getMarketData(): Promise<MarketDataResponse> {
-  return request<MarketDataResponse>("/market-data");
+  const mode = getMode();
+  if (mode === "frontend-mock") {
+    return requestLocal<MarketDataResponse>("/market-data");
+  }
+  return requestBackend<MarketDataResponse>("/api/market-data");
 }
 
-export async function getSymbolData(symbol: string): Promise<{
-  symbol: string;
-  data: HistoricalDataPoint[];
-  summary: MarketSummary;
-  last_updated: string | null;
-}> {
-  return request(`/market-data/${symbol.toUpperCase()}`);
+export async function refreshData() {
+  const mode = getMode();
+  if (mode === "frontend-mock") {
+    return requestLocal<any>("/market-data");
+  }
+  return requestBackend<any>("/api/refresh", { method: "POST" });
 }
 
-export async function refreshData(): Promise<{
-  success: boolean;
-  message: string;
-  records: number;
-  symbols: number;
-  last_updated: string | null;
-}> {
-  return request("/refresh", { method: "POST" });
+export async function setMockMode() {
+  return requestBackend<any>("/api/mode/mock", { method: "POST" });
 }
 
-export async function setMockMode(): Promise<{
-  success: boolean;
-  message: string;
-  mock_mode: boolean;
-}> {
-  return request("/mode/mock", { method: "POST" });
-}
-
-export async function setLiveMode(): Promise<{
-  success: boolean;
-  message: string;
-  mock_mode: boolean;
-}> {
-  return request("/mode/live", { method: "POST" });
+export async function setLiveMode() {
+  return requestBackend<any>("/api/mode/live", { method: "POST" });
 }
